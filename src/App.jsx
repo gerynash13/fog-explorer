@@ -4,17 +4,24 @@ import { usePlayerPosition } from "./usePlayerPosition";
 import { FogOverlay } from "./FogOverlay";
 import { PlaceMarkers } from "./PlaceMarkers";
 import { usePlaces } from "./usePlaces";
+import { useQuests } from "./useQuests";
+import { QuestPanel } from "./QuestPanel";
+import { THEMES, DEFAULT_THEME } from "./themes";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 
-// ─── DEV MODE ────────────────────────────────────────────────────────────────
-const DEV_MODE = true; // set false before shipping
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const DEV_MODE = true;
+const DEFAULT_POSITION = { lat: 34.6901, lng: 135.1956 }; // Kobe
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// Vite exposes .env.local variables via import.meta.env
+// The key must be prefixed with VITE_ to be accessible in the browser
+const GEMINI_KEY = import.meta.env.VITE_GEMINI_KEY;
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
 function ClickToReveal({ onPositionChange }) {
   useMapEvents({
     click: (e) => {
-      console.log("1. Click detected at", e.latlng);
       onPositionChange({ lat: e.latlng.lat, lng: e.latlng.lng });
     },
   });
@@ -30,29 +37,25 @@ function MapFollowPlayer({ position }) {
   return null;
 }
 
-// ─── APP ─────────────────────────────────────────────────────────────────────
-const DEFAULT_POSITION = { lat: 34.6901, lng: 135.1956 }; // Kobe
-
+// ─── APP ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const { position: gpsPosition, error: gpsError } = usePlayerPosition();
   const [testPosition, setTestPosition]             = useState(DEFAULT_POSITION);
+  const [visitedTiles, setVisitedTiles]             = useState(new Set());
+  const [themeId, setThemeId]                       = useState(DEFAULT_THEME);
 
   const playerPosition = DEV_MODE
     ? (testPosition || gpsPosition)
     : (gpsPosition  || testPosition);
 
-  // ── Lifted state ───────────────────────────────────────────────────────────
-  // visitedTiles used to live inside FogOverlay.
-  // It now lives here so both FogOverlay (draws fog) and PlaceMarkers
-  // (decides which pins are visible) can access the same Set.
-  // This pattern is called "lifting state up" — move state to the nearest
-  // common ancestor of all components that need it.
-  const [visitedTiles, setVisitedTiles] = useState(new Set());
-
-  // ── Places ────────────────────────────────────────────────────────────────
-  // usePlaces watches playerPosition and fetches from Overpass when the
-  // player enters a new zone. Returns a flat array of all places found so far.
   const places = usePlaces(playerPosition);
+
+  const { quests, completeQuest } = useQuests(
+    places,
+    playerPosition,
+    themeId,
+    GEMINI_KEY
+  );
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
@@ -68,45 +71,72 @@ export default function App() {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           maxZoom={19}
         />
-
         <MapFollowPlayer position={playerPosition} />
-
-        {/* FogOverlay now reads AND writes visitedTiles via props */}
         <FogOverlay
           playerPosition={playerPosition}
           visitedTiles={visitedTiles}
           onTilesUpdate={setVisitedTiles}
         />
-
-        {/* PlaceMarkers reads visitedTiles to decide which pins to show */}
-        <PlaceMarkers
-          places={places}
-          visitedTiles={visitedTiles}
-        />
-
+        <PlaceMarkers places={places} visitedTiles={visitedTiles} />
         {(DEV_MODE || !gpsPosition) && (
           <ClickToReveal onPositionChange={setTestPosition} />
         )}
       </MapContainer>
 
-      {/* ── HUD ── */}
+      {/* ── Quest panel ── */}
+      <QuestPanel
+        quests={quests}
+        onComplete={completeQuest}
+        themeId={themeId}
+      />
+
+      {/* ── Theme selector ── */}
+      <div style={styles.themePicker}>
+        {Object.values(THEMES).map(theme => (
+          <button
+            key={theme.id}
+            onClick={() => setThemeId(theme.id)}
+            style={{
+              ...styles.themeBtn,
+              background: themeId === theme.id
+                ? "rgba(255,255,255,0.15)"
+                : "transparent",
+              borderColor: themeId === theme.id
+                ? "rgba(255,255,255,0.5)"
+                : "rgba(255,255,255,0.15)",
+            }}
+          >
+            {theme.name}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Status bar ── */}
       <div style={styles.statusBar}>
         {gpsPosition
-          ? `GPS active — accuracy ~${Math.round(gpsPosition.accuracy)}m`
+          ? `GPS active — ~${Math.round(gpsPosition.accuracy)}m accuracy`
           : gpsError
-          ? `No GPS — click map to simulate walking`
+          ? "No GPS — click map to simulate walking"
           : "Acquiring GPS..."}
       </div>
 
+      {/* ── Debug box ── */}
       <div style={styles.debugBox}>
         {`${playerPosition.lat.toFixed(5)}, ${playerPosition.lng.toFixed(5)}`}
-        {` · ${visitedTiles.size} tiles · ${places.length} places`}
+        {` · ${visitedTiles.size} tiles · ${places.length} places · ${quests.length} quests`}
       </div>
 
+      {/* ── API key warning ── */}
+      {!GEMINI_KEY && (
+        <div style={styles.apiWarning}>
+          ⚠ No Gemini API key found. Add VITE_GEMINI_KEY to .env.local to enable quests.
+        </div>
+      )}
     </div>
   );
 }
 
+// ─── STYLES ───────────────────────────────────────────────────────────────────
 const styles = {
   statusBar: {
     position:   "absolute",
@@ -134,5 +164,36 @@ const styles = {
     fontFamily: "monospace",
     zIndex:     1000,
     pointerEvents: "none",
+  },
+  themePicker: {
+    position:   "absolute",
+    bottom:     56,
+    left:       "50%",
+    transform:  "translateX(-50%)",
+    display:    "flex",
+    gap:        6,
+    zIndex:     1000,
+  },
+  themeBtn: {
+    fontSize:     12,
+    padding:      "5px 14px",
+    borderRadius: 20,
+    border:       "1px solid",
+    color:        "#e0e0e0",
+    cursor:       "pointer",
+    transition:   "background 0.15s",
+  },
+  apiWarning: {
+    position:   "absolute",
+    top:        50,
+    left:       "50%",
+    transform:  "translateX(-50%)",
+    background: "rgba(180,100,0,0.85)",
+    color:      "#fff",
+    padding:    "8px 16px",
+    borderRadius: 8,
+    fontSize:   12,
+    zIndex:     1000,
+    whiteSpace: "nowrap",
   },
 };

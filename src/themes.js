@@ -50,4 +50,6 @@ export const THEMES = {
         GPS、アプリ、スマートフォンなど現代技術への言及は禁止。
         最後は冒険心や好奇心をかき立てる余韻で締めくくること。`,
     }
-}
+};
+
+export const DEFAULT_THEME = "rpg";
