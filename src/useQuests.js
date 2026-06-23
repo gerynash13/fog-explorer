@@ -19,6 +19,7 @@ export const QUEST_STATUS = {
 const MAX_ACTIVE_QUESTS    = 3;    // never overwhelm the player
 const QUEST_TRIGGER_RADIUS = 300;  // meters — generate quest when place is this close
 const ARRIVAL_RADIUS       = 60;   // meters — "arrived" when this close
+const DEV_ARRIVAL_RADIUS   = 300;  // meters for dev mode for click testing
 
 // ─── HOOK ─────────────────────────────────────────────────────────────────────
 // Manages the full quest lifecycle:
@@ -47,7 +48,7 @@ export function useQuests(places, playerPosition, themeId, apiKey) {
 
     const activeCount = quests.filter(
       q => q.status === QUEST_STATUS.ACTIVE || q.status === QUEST_STATUS.ARRIVED
-    ).length;
+    ).length + generatingIds.current.size;
 
     // Already at the quest limit — don't generate more
     if (activeCount >= MAX_ACTIVE_QUESTS) return;
@@ -126,7 +127,8 @@ export function useQuests(places, playerPosition, themeId, apiKey) {
           quest.place.lat, quest.place.lng
         );
 
-        if (dist <= ARRIVAL_RADIUS) {
+        const arrivalRadius = import.meta.env.DEV ? DEV_ARRIVAL_RADIUS : ARRIVAL_RADIUS;
+        if (dist <= arrivalRadius) {
           console.log(`[useQuests] Arrived at: ${quest.place.name}`);
           // Return a new object with updated status.
           // In React, you must never mutate state directly —
@@ -144,12 +146,18 @@ export function useQuests(places, playerPosition, themeId, apiKey) {
   // ── Step 3: Complete a quest ──────────────────────────────────────────────
   // Called by the UI when the player taps the complete button.
   const completeQuest = (questId) => {
+    // Step 1: flip status to COMPLETE immediately (grey out the card)
     setQuests(prev =>
       prev.map(q =>
         q.id === questId ? { ...q, status: QUEST_STATUS.COMPLETE } : q
       )
     );
     console.log(`[useQuests] Quest completed: ${questId}`);
+
+    // Step 2: after 2 seconds, remove it from the array entirely using setTimeout
+    setTimeout(() => {
+      setQuests(prev => prev.filter(q => q.id !== questId));
+    }, 2000);
   };
 
   return { quests, completeQuest };

@@ -2,7 +2,25 @@ import { THEMES } from "./themes.js";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+
+// ─── MOCK MODE ────────────────────────────────────────────────────────────────
+// Set to true when the Gemini API quota is exhausted, or when I want to test the
+// quest UI without burning API calls. Returns instantly.
+const MOCK_MODE = true;
+
+const MOCK_NARRATIVES = [
+  "古き石畳の先に、旅人たちが語り継ぐ場所がある。その扉を開く者だけが、真実を知るという。",
+  "北の風が運ぶのは、かすかな煙の香り。腕利きの料理人が、今日も火を熾しているようだ。",
+  "地図には載っていない路地の奥。かつて多くの冒険者が足を踏み入れ、誰も後悔しなかったと伝わる。",
+]
+
+// Mock version means no network call, instant response
+async function mockNarrative() {
+  // Simulate a slight delay so the UI behaves realistically
+  await new Promise(resolve => setTimeout(resolve, 400));
+  return MOCK_NARRATIVES[Math.floor(Math.random() * MOCK_NARRATIVES.length)];
+}
 
 // ─── TIME GATES ───────────────────────────────────────────────────────────────
 // Since Overpass doesn't give reliable opening hours, we use sensible defaults.
@@ -97,6 +115,8 @@ export function getDistanceMeters(lat1, lng1, lat2, lng2) {
 // Calls the Gemini API to write a quest hook for a given place.
 // Returns the narrative string, or throws on failure.
 export async function generateQuestNarrative(place, playerPosition, themeId, apiKey) {
+  if (MOCK_MODE) return mockNarrative(); // Mock version, short-circuits everything below.
+
   const theme     = THEMES[themeId];
   const direction = getCompassDirection(
     playerPosition.lat, playerPosition.lng,
@@ -121,6 +141,19 @@ Approximate distance: ${distance} meters
 
 Requirements: 2-3 sentences max. Make the player want to go there.`;
 
+  // Retry loop
+  const MAX_ATTEMPTS = 3;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+
+    // If this isn't the first attempt, wait a bit before retrying
+    // 2^0, 2^1, 2^2, 2^3 = 1, 2, 4, 8 seconds
+    if (attempt > 0) {
+      const waitMs = Math.pow(2, attempt) * 1000;
+      console.log(`[questService] Retrying ${place.name} in ${waitMs/1000}s (attempt ${attempt+1})`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+
   const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
@@ -140,6 +173,13 @@ Requirements: 2-3 sentences max. Make the player want to go there.`;
     }),
   });
 
+  // 503 is the only error worth retrying ("try again later")
+  // 404 (wrong model) or 401 (wrong API key) would fail on retry anyways
+  if (response.status == 503 && attempt < MAX_ATTEMPTS -1) {
+    console.warn(`[questService] 503 for ${place.name}. Retrying...`);
+    continue;
+  }
+
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Gemini API error ${response.status}: ${error}`);
@@ -151,4 +191,8 @@ Requirements: 2-3 sentences max. Make the player want to go there.`;
   if (!narrative) throw new Error("Gemini returned empty content");
 
   return narrative;
+
+  }
+
+  throw new Error(`Failed to generate quest for ${place.name} after ${MAX_ATTEMPTS} attempts`);
 }
