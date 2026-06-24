@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, useMapEvents, useMap } from "react-leaflet";
 import { usePlayerPosition } from "./usePlayerPosition";
 import { FogOverlay } from "./FogOverlay";
@@ -6,6 +6,9 @@ import { PlaceMarkers } from "./PlaceMarkers";
 import { usePlaces } from "./usePlaces";
 import { useQuests } from "./useQuests";
 import { QuestPanel } from "./QuestPanel";
+import { useProgression } from "./useProgression";
+import { PlayerHUD } from "./PlayerHUD";
+import { RewardNotification } from "./RewardNotification";
 import { THEMES, DEFAULT_THEME } from "./themes";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
@@ -56,6 +59,47 @@ export default function App() {
     themeId,
     GEMINI_KEY
   );
+
+  const {
+    player,
+    notifications,
+    onQuestComplete,
+    onPlaceDiscovered,
+    onTilesRevealed,
+  } = useProgression();
+
+  // Track new place discoveries
+  // prevPlacesCount lets us detect how many NEW places were added since last render
+  // useRef is right here because changing it shouldn't trigger a re-render
+  const prevPlacesCount = useRef(0);
+
+  useEffect(() => {
+    const newCount = places.length- prevPlacesCount.current;
+    if (newCount > 0) {
+      onPlaceDiscovered(newCount);
+      prevPlacesCount.current = places.length;
+    }
+  }, [places.length]);
+
+  // Track new tile reveals
+  const prevTileCount = useRef(0);
+
+  useEffect(() => {
+    const newCount = visitedTiles.size - prevTileCount.current;
+    if (newCount > 0) {
+      onTilesRevealed(newCount);
+      prevTileCount.current = visitedTiles.size;
+    }
+  }, [visitedTiles.size]);
+
+  // Quest completion: trigger both quest state AND progression
+  // This is the event-driven connection between the quest system and progression
+  // Neither system knows about the other. App acts as a proxy between them.
+  const handleQuestComplete = (questId) => {
+    const quest = quests.find(q => q.id === questId);
+    completeQuest(questId); // updates quest state (grey out, then remove)
+    if (quest) onQuestComplete(quest); // awards XP, currency, checks badges
+  };
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
