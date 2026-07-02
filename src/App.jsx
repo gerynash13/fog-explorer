@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, useMapEvents, useMap } from "react-leaflet";
 import { usePlayerPosition } from "./usePlayerPosition";
 import { FogOverlay } from "./FogOverlay";
+import { PlayerTorch } from "./PlayerTorch";
 import { PlaceMarkers } from "./PlaceMarkers";
 import { usePlaces } from "./usePlaces";
 import { useQuests } from "./useQuests";
@@ -11,6 +12,7 @@ import { PlayerHUD } from "./PlayerHUD";
 import { RewardNotification } from "./RewardNotification";
 import { THEMES, DEFAULT_THEME } from "./themes";
 import "leaflet/dist/leaflet.css";
+import "./theme.css";
 import "./App.css";
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -46,6 +48,7 @@ export default function App() {
   const [testPosition, setTestPosition]             = useState(DEFAULT_POSITION);
   const [visitedTiles, setVisitedTiles]             = useState(new Set());
   const [themeId, setThemeId]                       = useState(DEFAULT_THEME);
+  const [themeMenuOpen, setThemeMenuOpen]           = useState(false);
 
   const playerPosition = DEV_MODE
     ? (testPosition || gpsPosition)
@@ -111,9 +114,9 @@ export default function App() {
         zoomControl={true}
       >
         <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          maxZoom={19}
+        url={`https://tiles.stadiamaps.com/tiles/stamen_watercolor/{z}/{x}/{y}.jpg?api_key=${import.meta.env.VITE_STADIA_KEY}`}
+        attribution='Map tiles by <a href="https://stamen.com">Stamen Design</a>, under CC BY 3.0. Data by <a href="https://openstreetmap.org">OpenStreetMap</a>, under ODbL.'
+        maxZoom={19}
         />
         <MapFollowPlayer position={playerPosition} />
         <FogOverlay
@@ -121,6 +124,7 @@ export default function App() {
           visitedTiles={visitedTiles}
           onTilesUpdate={setVisitedTiles}
         />
+        <PlayerTorch playerPosition={playerPosition} />
         <PlaceMarkers places={places} visitedTiles={visitedTiles} />
         {(DEV_MODE || !gpsPosition) && (
           <ClickToReveal onPositionChange={setTestPosition} />
@@ -130,45 +134,21 @@ export default function App() {
       {/* ── Quest panel ── */}
       <QuestPanel
         quests={quests}
-        onComplete={completeQuest}
+        onComplete={handleQuestComplete}
         themeId={themeId}
       />
 
-      {/* ── Theme selector ── */}
-      <div style={styles.themePicker}>
-        {Object.values(THEMES).map(theme => (
-          <button
-            key={theme.id}
-            onClick={() => setThemeId(theme.id)}
-            style={{
-              ...styles.themeBtn,
-              background: themeId === theme.id
-                ? "rgba(255,255,255,0.15)"
-                : "transparent",
-              borderColor: themeId === theme.id
-                ? "rgba(255,255,255,0.5)"
-                : "rgba(255,255,255,0.15)",
-            }}
-          >
-            {theme.name}
-          </button>
-        ))}
-      </div>
+      <PlayerHUD player={player} />
 
-      {/* ── Status bar ── */}
-      <div style={styles.statusBar}>
-        {gpsPosition
-          ? `GPS active — ~${Math.round(gpsPosition.accuracy)}m accuracy`
-          : gpsError
-          ? "No GPS — click map to simulate walking"
-          : "Acquiring GPS..."}
-      </div>
+      <RewardNotification notifications={notifications} />
 
-      {/* ── Debug box ── */}
-      <div style={styles.debugBox}>
-        {`${playerPosition.lat.toFixed(5)}, ${playerPosition.lng.toFixed(5)}`}
-        {` · ${visitedTiles.size} tiles · ${places.length} places · ${quests.length} quests`}
-      </div>
+       {DEV_MODE && (
+        <div style={styles.debugBox}>
+          {gpsPosition ? "GPS✓" : gpsError ? "GPS✗" : "GPS..."}
+          {`· ${playerPosition?.lat.toFixed(4)}, ${playerPosition?.lng.toFixed(4)}`}
+          {`· ${visitedTiles.size}t · ${places.length}p · Lv.${player.level}`}
+        </div>
+      )}
 
       {/* ── API key warning ── */}
       {!GEMINI_KEY && (
@@ -180,56 +160,62 @@ export default function App() {
   );
 }
 
-// ─── STYLES ───────────────────────────────────────────────────────────────────
+// ─── STYLES ──────────────────────────────────────────────────────────────────
 const styles = {
-  statusBar: {
-    position:   "absolute",
-    bottom:     20,
-    left:       "50%",
-    transform:  "translateX(-50%)",
-    background: "rgba(0,0,0,0.65)",
-    color:      "#e0e0e0",
-    padding:    "6px 16px",
-    borderRadius: 20,
-    fontSize:   12,
-    zIndex:     1000,
-    pointerEvents: "none",
-    whiteSpace: "nowrap",
-  },
   debugBox: {
-    position:   "absolute",
-    top:        12,
-    left:       12,
-    background: "rgba(0,0,0,0.55)",
-    color:      "#a0ffb0",
-    padding:    "4px 10px",
+    position:     "absolute",
+    // Top-right so it never collides with the medallion (top-left)
+    top:          "calc(var(--safe-top) + 10px)",
+    right:        "calc(var(--safe-right) + 10px)",
+    background:   "rgba(0,0,0,0.55)",
+    color:        "#a0ffb0",
+    padding:      "4px 8px",
     borderRadius: 6,
-    fontSize:   11,
-    fontFamily: "monospace",
-    zIndex:     1000,
+    fontSize:     10,
+    fontFamily:   "monospace",
+    zIndex:       999,
     pointerEvents: "none",
+    maxWidth:     "60vw",
   },
-  themePicker: {
-    position:   "absolute",
-    bottom:     56,
-    left:       "50%",
-    transform:  "translateX(-50%)",
-    display:    "flex",
-    gap:        6,
-    zIndex:     1000,
+  themeMenuWrapper: {
+    position: "absolute",
+    // Sits below the debug box when DEV_MODE is on, otherwise top-right corner
+    top:      "calc(var(--safe-top) + 50px)",
+    right:    "calc(var(--safe-right) + 10px)",
+    zIndex:   1000,
   },
-  themeBtn: {
-    fontSize:     12,
-    padding:      "5px 14px",
-    borderRadius: 20,
-    border:       "1px solid",
-    color:        "#e0e0e0",
+  themeIconBtn: {
+    width:        40,
+    height:       40,
+    borderRadius: "50%",
+    background:   "var(--ink-black-soft)",
+    border:       "1px solid var(--gold)",
+    fontSize:     18,
     cursor:       "pointer",
-    transition:   "background 0.15s",
+    boxShadow:    "0 2px 6px rgba(0,0,0,0.4)",
+  },
+  themeDropdown: {
+    position:     "absolute",
+    top:          48,
+    right:        0,
+    borderRadius: 8,
+    padding:      "6px 0",
+    minWidth:     120,
+    display:      "flex",
+    flexDirection: "column",
+  },
+  themeOption: {
+    background:  "transparent",
+    border:      "none",
+    textAlign:   "left",
+    padding:     "8px 14px",
+    fontFamily:  "var(--font-jp-sans)",
+    fontSize:    13,
+    cursor:      "pointer",
   },
   apiWarning: {
     position:   "absolute",
-    top:        50,
+    top:        "calc(var(--safe-top) + 10px)",
     left:       "50%",
     transform:  "translateX(-50%)",
     background: "rgba(180,100,0,0.85)",
@@ -239,5 +225,7 @@ const styles = {
     fontSize:   12,
     zIndex:     1000,
     whiteSpace: "nowrap",
+    maxWidth:   "90vw",
+    textAlign:  "center",
   },
 };

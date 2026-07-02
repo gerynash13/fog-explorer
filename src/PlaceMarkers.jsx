@@ -1,10 +1,9 @@
-import { Marker, Popup } from "react-leaflet";
+import { useMemo } from "react";
+import { Marker, Popup, useMap, useMapEvents } from "react-leaflet";
+import { useState } from "react";
 import L from "leaflet";
 
 // ─── LEAFLET ICON FIX ────────────────────────────────────────────────────────
-// Leaflet's default marker icons reference image files by relative path.
-// When bundled by Vite, those paths break. This is a known issue with
-// Leaflet + any modern bundler. The fix: point the icons to a CDN copy.
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -13,58 +12,20 @@ L.Icon.Default.mergeOptions({
 });
 
 // ─── TYPE → EMOJI MAP ────────────────────────────────────────────────────────
-// Visual shorthand for place categories. Each type maps to an emoji icon.
-// These will eventually become themed icons (sword for RPG, terminal for hacker).
-// For now, emoji is lightweight and readable.
 const TYPE_EMOJI = {
-  // Food & drink
-  cafe:             "☕",
-  restaurant:       "🍽️",
-  bar:              "🍺",
-  pub:              "🍺",
-  fast_food:        "🍟",
-  ice_cream:        "🍦",
-  bakery:           "🥐",
-  // Culture & learning
-  library:          "📚",
-  cinema:           "🎬",
-  theatre:          "🎭",
-  museum:           "🏛️",
-  gallery:          "🖼️",
-  artwork:          "🎨",
-  // Nature & outdoor
-  park:             "🌳",
-  garden:           "🌸",
-  nature_reserve:   "🌿",
-  viewpoint:        "👁️",
-  playground:       "🛝",
-  sports_centre:    "⚽",
-  // Shopping
-  books:            "📖",
-  supermarket:      "🛒",
-  convenience:      "🏪",
-  marketplace:      "🏪",
-  // History
-  monument:         "🗿",
-  castle:           "🏰",
-  temple:           "⛩️",
-  shrine:           "⛩️",
-  ruins:            "🏚️",
-  memorial:         "🕯️",
-  // Misc
-  attraction:       "⭐",
-  information:      "ℹ️",
-  community_centre: "🏢",
-  zoo:              "🦁",
-  aquarium:         "🐟",
+  cafe: "☕", restaurant: "🍽️", bar: "🍺", pub: "🍺", fast_food: "🍟",
+  ice_cream: "🍦", bakery: "🥐", library: "📚", cinema: "🎬", theatre: "🎭",
+  museum: "🏛️", gallery: "🖼️", artwork: "🎨", park: "🌳", garden: "🌸",
+  nature_reserve: "🌿", viewpoint: "👁️", playground: "🛝", sports_centre: "⚽",
+  books: "📖", supermarket: "🛒", convenience: "🏪", marketplace: "🏪",
+  monument: "🗿", castle: "🏰", temple: "⛩️", shrine: "⛩️", ruins: "🏚️",
+  memorial: "🕯️", attraction: "⭐", information: "ℹ️", community_centre: "🏢",
+  zoo: "🦁", aquarium: "🐟",
 };
 
-// ─── EMOJI ICON FACTORY ───────────────────────────────────────────────────────
-// Creates a Leaflet DivIcon — a custom HTML element used as a map pin.
-// DivIcon lets us use any HTML (including emoji) instead of just image files.
 function createEmojiIcon(emoji) {
   return L.divIcon({
-    className: "",    // empty string prevents Leaflet adding default white box styles
+    className: "",
     html: `<div style="
       font-size: 22px;
       line-height: 1;
@@ -72,14 +33,11 @@ function createEmojiIcon(emoji) {
       cursor: pointer;
     ">${emoji}</div>`,
     iconSize:   [28, 28],
-    iconAnchor: [14, 14],  // center of the icon sits on the coordinate
-    popupAnchor: [0, -16], // popup appears above the icon
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -16],
   });
 }
 
-// ─── VISIBILITY CHECK ─────────────────────────────────────────────────────────
-// Only show a place marker if its tile has been revealed.
-// We use the same tile math as FogOverlay so they stay in sync.
 const FOG_TILE_METERS = 60;
 
 function isRevealed(place, visitedTiles) {
@@ -88,28 +46,75 @@ function isRevealed(place, visitedTiles) {
   return visitedTiles.has(`${tx},${ty}`);
 }
 
+// ─── DECLUTTERING ─────────────────────────────────────────────────────────────
+// Minimum pixel distance allowed between two markers on screen.
+// Below this distance, icons visually overlap and read as a meaningless blob —
+// exactly the "circle clusters" problem from dense areas like central Kobe.
+const MIN_MARKER_SPACING_PX = 54;
+
+// Greedy decluttering: walk through candidate places, accept a marker only if
+// it's far enough (in screen pixels) from every marker already accepted.
+// This is the same family of algorithm used by map labelling engines
+// (Google Maps, Mapbox) to avoid overlapping pins/labels.
+function declutterMarkers(places, map) {
+  const accepted = [];          // markers we've decided to keep
+  const acceptedPoints = [];    // their screen positions, parallel array
+
+  for (const place of places) {
+    const point = map.latLngToContainerPoint([place.lat, place.lng]);
+
+    // Check distance against every already-accepted marker.
+    // For a few hundred candidate places this is fast enough (no need
+    // for a spatial index like a quadtree at this scale).
+    let tooClose = false;
+    for (const existing of acceptedPoints) {
+      const dx = point.x - existing.x;
+      const dy = point.y - existing.y;
+      const distSq = dx * dx + dy * dy; // squared distance — avoids a sqrt call
+      if (distSq < MIN_MARKER_SPACING_PX * MIN_MARKER_SPACING_PX) {
+        tooClose = true;
+        break;
+      }
+    }
+
+    if (!tooClose) {
+      accepted.push(place);
+      acceptedPoints.push(point);
+    }
+  }
+
+  return accepted;
+}
+
 // ─── COMPONENT ───────────────────────────────────────────────────────────────
-// Renders a marker for each place that sits inside a revealed fog tile.
-// Places in fog stay hidden — discovering them is part of the game.
-//
-// Props:
-//   places       — array of place objects from usePlaces
-//   visitedTiles — Set of "x,y" strings from App (lifted from FogOverlay)
 export function PlaceMarkers({ places, visitedTiles }) {
-  const visiblePlaces = places.filter(p => isRevealed(p, visitedTiles));
+  const map = useMap();
+
+  // Distances between two lat/lng points only change with ZOOM, not with pan
+  // (panning is a pure translation — relative spacing is preserved).
+  // So we only need to recompute decluttering when zoom changes, not on every
+  // map drag. This tick forces useMemo to recalculate exactly when needed.
+  const [zoomTick, setZoomTick] = useState(0);
+  useMapEvents({
+    zoomend: () => setZoomTick(t => t + 1),
+  });
+
+  const visiblePlaces = useMemo(() => {
+    const revealed = places.filter(p => isRevealed(p, visitedTiles));
+    return declutterMarkers(revealed, map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, visitedTiles, zoomTick]);
 
   return (
     <>
       {visiblePlaces.map(place => {
         const emoji = TYPE_EMOJI[place.type] || "📍";
-
         return (
           <Marker
             key={place.id}
             position={[place.lat, place.lng]}
             icon={createEmojiIcon(emoji)}
           >
-            {/* Popup appears when the marker is clicked */}
             <Popup>
               <div style={{ minWidth: 140 }}>
                 <div style={{ fontWeight: 600, marginBottom: 2 }}>

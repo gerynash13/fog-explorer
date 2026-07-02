@@ -69,7 +69,7 @@ export function useProgression() {
     }, [player]);
 
     // Internal: push a notification and auto-dismiss after 3.5 seconds
-    const pushNotification = useCallback((type, data) => {
+    const pushNotification = useCallback((notification) => {
         const id = `notif_${Date.now()}_${Math.random()}`;
         setNotifications(prev => [...prev, { ...notification, id }]);
         setTimeout(() => {

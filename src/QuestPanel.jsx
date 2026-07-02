@@ -1,155 +1,219 @@
+import { useState } from "react";
 import { QUEST_STATUS } from "./useQuests.js";
 import { THEMES } from "./themes.js";
 
 // ─── STATUS DISPLAY CONFIG ────────────────────────────────────────────────────
 const STATUS_CONFIG = {
   [QUEST_STATUS.ACTIVE]: {
-    label:      "Active",
-    color:      "#7eb8f7",
-    borderLeft: "#3a7fd5",
+    label: "進行中",
+    color: "var(--status-active)",
+    dot:   "●",
   },
   [QUEST_STATUS.ARRIVED]: {
-    label:      "You're here!",
-    color:      "#7ef7a0",
-    borderLeft: "#2db85a",
+    label: "到着",
+    color: "var(--status-arrived)",
+    dot:   "✦",
   },
   [QUEST_STATUS.COMPLETE]: {
-    label:      "Complete",
-    color:      "#888",
-    borderLeft: "#444",
+    label: "達成",
+    color: "#8a7a5c",
+    dot:   "✓",
   },
 };
 
-// ─── COMPONENT ───────────────────────────────────────────────────────────────
-// Renders a panel of quest cards on the right side of the screen.
-// Only shows quests that aren't expired. Complete quests fade out.
+// ─── COMPONENT — BOTTOM SCROLL SHEET ─────────────────────────────────────────
+// Previously a floating right-side panel. Real JRPG dialogue/quest boxes are
+// bottom-anchored (Fire Emblem, Pokémon, Final Fantasy) — and a bottom sheet
+// also solves the mobile width problem, since it can span the full screen
+// instead of competing for a narrow phone's width.
 //
-// Props:
-//   quests     — array of quest objects from useQuests
-//   onComplete — function(questId) called when player taps complete
-//   themeId    — "rpg" | "hacker" | "chill" — affects labels and header
+// `expanded` is local UI state — only this component cares whether the
+// sheet is open or collapsed, so it doesn't need to live in App.
 export function QuestPanel({ quests, onComplete, themeId }) {
-  const theme = THEMES[themeId];
-
-  // Show active and arrived quests in full; keep completed ones briefly visible
-  // so the player sees the confirmation, then filter them out after render.
+  const [expanded, setExpanded] = useState(true);
+  const theme   = THEMES[themeId];
   const visible = quests.filter(q => q.status !== QUEST_STATUS.EXPIRED);
 
   if (visible.length === 0) return null;
 
   return (
-    <div style={styles.panel}>
+    <div style={styles.sheet} className="jrpg-panel">
 
-      {/* Panel header changes label based on theme */}
-      <div style={styles.header}>
-        {theme.ui.questPanel}
+      {/* ── Drag handle / collapse toggle ── */}
+      {/* Tapping anywhere on the header toggles expand/collapse.
+          min-height 44px keeps it comfortably tappable on a phone. */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={styles.handle}
+        className="jrpg-touch-target"
+      >
+        <span style={styles.handleBar} />
+        <span style={styles.headerText}>
+          {theme.ui.questPanel} ({visible.length})
+        </span>
+        <span style={{
+          ...styles.chevron,
+          transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+        }}>
+          ▲
+        </span>
+      </button>
+
+      {/* ── Scrollable quest list ── */}
+      {/* maxHeight + overflowY with a CSS transition on the wrapper gives a
+          smooth slide rather than an abrupt show/hide. */}
+      <div style={{
+        ...styles.listWrapper,
+        maxHeight: expanded ? "46vh" : "0px",
+      }}>
+        <div style={styles.list}>
+          {visible.map(quest => {
+            const cfg = STATUS_CONFIG[quest.status];
+            const isComplete = quest.status === QUEST_STATUS.COMPLETE;
+
+            return (
+              <div
+                key={quest.id}
+                style={{ ...styles.card, opacity: isComplete ? 0.45 : 1 }}
+              >
+                <span className="jrpg-corner" style={{ top: 4, left: 4 }}>✦</span>
+                <span className="jrpg-corner" style={{ top: 4, right: 4 }}>✦</span>
+
+                <div style={styles.cardHeader}>
+                  <span style={styles.placeName}>{quest.place.name}</span>
+                  <span style={{ ...styles.statusDot, color: cfg.color }}>
+                    {cfg.dot} {cfg.label}
+                  </span>
+                </div>
+
+                <div style={styles.narrative}>{quest.narrative}</div>
+
+                {quest.status === QUEST_STATUS.ARRIVED && (
+                  <button
+                    style={styles.completeBtn}
+                    className="jrpg-touch-target"
+                    onClick={() => onComplete(quest.id)}
+                  >
+                    {theme.ui.completeButton}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
-
-      {visible.map(quest => {
-        const statusCfg = STATUS_CONFIG[quest.status];
-        const isComplete = quest.status === QUEST_STATUS.COMPLETE;
-
-        return (
-          <div
-            key={quest.id}
-            style={{
-              ...styles.card,
-              borderLeft: `3px solid ${statusCfg.borderLeft}`,
-              opacity: isComplete ? 0.45 : 1,
-            }}
-          >
-            {/* Place name */}
-            <div style={styles.placeName}>
-              {quest.place.name}
-            </div>
-
-            {/* AI-generated narrative */}
-            <div style={styles.narrative}>
-              {quest.narrative}
-            </div>
-
-            {/* Footer: status badge + optional complete button */}
-            <div style={styles.cardFooter}>
-              <span style={{ ...styles.statusBadge, color: statusCfg.color }}>
-                ● {statusCfg.label}
-              </span>
-
-              {/* Complete button only shows when the player has arrived */}
-              {quest.status === QUEST_STATUS.ARRIVED && (
-                <button
-                  style={styles.completeBtn}
-                  onClick={() => onComplete(quest.id)}
-                >
-                  {theme.ui.completeButton}
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const styles = {
-  panel: {
-    position:    "absolute",
-    top:         60,
-    right:       12,
-    width:       260,
-    maxHeight:   "70vh",
-    overflowY:   "auto",
-    zIndex:      1000,
-    display:     "flex",
-    flexDirection: "column",
-    gap:         8,
+  sheet: {
+    position:     "fixed",
+    bottom:       0,
+    left:         0,
+    right:        0,
+    // Side padding respects notch/rounded-corner safe areas on real phones
+    paddingLeft:  "var(--safe-left)",
+    paddingRight: "var(--safe-right)",
+    paddingBottom: "var(--safe-bottom)",
+    borderRadius: "14px 14px 0 0",
+    borderBottom: "none",
+    zIndex:       1000,
     pointerEvents: "auto",
   },
-  header: {
-    fontSize:    13,
-    fontWeight:  600,
-    color:       "#e0e0e0",
-    background:  "rgba(0,0,0,0.7)",
-    padding:     "6px 12px",
-    borderRadius: 8,
+  handle: {
+    width:          "100%",
+    background:     "transparent",
+    border:         "none",
+    display:        "flex",
+    alignItems:     "center",
+    justifyContent: "center",
+    gap:            8,
+    padding:        "10px 16px",
+    cursor:         "pointer",
+    position:       "relative",
+  },
+  handleBar: {
+    position:     "absolute",
+    top:          6,
+    left:         "50%",
+    transform:    "translateX(-50%)",
+    width:        36,
+    height:       4,
+    borderRadius: 99,
+    background:   "rgba(61,40,23,0.35)",
+  },
+  headerText: {
+    fontFamily: "var(--font-jp)",
+    fontSize:   14,
+    fontWeight: 700,
+    color:      "var(--parchment-text)",
+    marginTop:  4,
+  },
+  chevron: {
+    fontSize:   10,
+    color:      "var(--gold)",
+    marginTop:  4,
+    transition: "transform 0.3s ease",
+  },
+  listWrapper: {
+    overflow:   "hidden",
+    transition: "max-height 0.35s ease",
+  },
+  list: {
+    display:       "flex",
+    flexDirection: "column",
+    gap:           10,
+    padding:       "0 14px 14px",
+    overflowY:     "auto",
+    maxHeight:     "46vh",
   },
   card: {
-    background:   "rgba(10, 10, 25, 0.88)",
+    position:     "relative",
+    background:   "rgba(255, 250, 235, 0.55)",
+    border:       "1px solid rgba(61,40,23,0.3)",
     borderRadius: 8,
-    padding:      "10px 12px",
-    backdropFilter: "blur(4px)",
+    padding:      "12px 14px",
     transition:   "opacity 0.4s",
   },
-  placeName: {
-    fontSize:    13,
-    fontWeight:  600,
-    color:       "#f0f0f0",
-    marginBottom: 5,
-  },
-  narrative: {
-    fontSize:    12,
-    color:       "#b0b8cc",
-    lineHeight:  1.5,
-    marginBottom: 8,
-    fontStyle:   "italic",
-  },
-  cardFooter: {
+  cardHeader: {
     display:        "flex",
     justifyContent: "space-between",
     alignItems:     "center",
+    marginBottom:   6,
+    flexWrap:       "wrap",
+    gap:            4,
   },
-  statusBadge: {
+  placeName: {
+    fontFamily: "var(--font-jp)",
+    fontSize:   14,
+    fontWeight: 700,
+    color:      "var(--parchment-text)",
+  },
+  statusDot: {
+    fontFamily: "var(--font-jp-sans)",
     fontSize:   11,
-    fontWeight: 500,
+    fontWeight: 600,
+  },
+  narrative: {
+    fontFamily: "var(--font-jp-sans)",
+    fontSize:   12.5,
+    lineHeight: 1.6,
+    color:      "#5a4530",
+    marginBottom: 8,
   },
   completeBtn: {
-    fontSize:     11,
-    padding:      "4px 10px",
-    background:   "rgba(45, 184, 90, 0.2)",
-    border:       "1px solid #2db85a",
+    fontFamily:   "var(--font-jp)",
+    fontSize:     13,
+    fontWeight:   700,
+    width:        "100%",
+    padding:      "8px 0",
+    background:   "linear-gradient(180deg, var(--gold-bright), var(--gold))",
+    border:       "1px solid #8a6d1f",
     borderRadius: 6,
-    color:        "#7ef7a0",
+    color:        "#3d2817",
     cursor:       "pointer",
+    boxShadow:    "0 2px 4px rgba(0,0,0,0.3)",
   },
 };
